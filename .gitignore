@@ -13,7 +13,6 @@ venv/
 env/
 .env/
 bin/
-lib/
 include/
 __pycache__/
 *.pyc
