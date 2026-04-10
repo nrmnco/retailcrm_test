@@ -23,16 +23,32 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="RetailCRM Webhook")
 
 
-def transform(order: dict) -> dict:
-    """Transform a RetailCRM order payload into the Supabase row format."""
-    items = order.get("items", [])
-    total_sum = sum(
-        item.get("quantity", 0) * item.get("initialPrice", 0)
-        for item in items
-    )
+def transform(order: dict):
+    """Transform a RetailCRM order payload into Supabase formats."""
+    retailcrm_id = order.get("id")
+    
+    # Consolidate items data
+    items_rows = []
+    raw_items = order.get("items", [])
+    for item in raw_items:
+        items_rows.append({
+            "order_retailcrm_id": retailcrm_id,
+            "product_name": item.get("name", ""),
+            "product_external_id": item.get("externalId", ""),
+            "quantity": item.get("quantity", 0),
+            "price": item.get("price", 0),
+        })
 
-    return {
-        "retailcrm_id": order.get("id"),
+    # Calculate total sum if not provided
+    total_sum = order.get("totalSumm")
+    if total_sum is None:
+        total_sum = sum(
+            item.get("quantity", 0) * item.get("initialPrice", 0)
+            for item in raw_items
+        )
+
+    order_row = {
+        "retailcrm_id": retailcrm_id,
         "first_name": order.get("firstName", ""),
         "last_name": order.get("lastName", ""),
         "phone": order.get("phone", ""),
@@ -44,6 +60,8 @@ def transform(order: dict) -> dict:
         "address": order.get("delivery", {}).get("address", {}).get("text", ""),
         "created_at": order.get("createdAt"),
     }
+    
+    return order_row, items_rows
 
 
 async def send_telegram(row: dict):
@@ -92,19 +110,26 @@ async def on_order_create(request: Request):
     if not order:
         return JSONResponse(status_code=400, content={"status": "error", "message": "Missing order data"})
 
-    row = transform(order)
+    order_row, items_rows = transform(order)
 
     try:
-        supabase.table("orders").upsert(row, on_conflict="retailcrm_id").execute()
-        logger.info("Order %s upserted to Supabase", row["retailcrm_id"])
+        # 1. Upsert Order
+        supabase.table("orders").upsert(order_row, on_conflict="retailcrm_id").execute()
+        
+        # 2. Update Order Items (delete old ones first to handle removals)
+        if items_rows:
+            supabase.table("order_items").delete().eq("order_retailcrm_id", order_row["retailcrm_id"]).execute()
+            supabase.table("order_items").insert(items_rows).execute()
+        
+        logger.info("Order %s and its %d items stored in Supabase", order_row["retailcrm_id"], len(items_rows))
 
-        if row["total_sum"] > THRESHOLD:
-            await send_telegram(row)
+        if order_row["total_sum"] > THRESHOLD:
+            await send_telegram(order_row)
     except Exception as e:
-        logger.error("Error processing order %s: %s", row.get("retailcrm_id"), e)
+        logger.error("Error processing order %s: %s", order_row.get("retailcrm_id"), e)
         return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
 
-    return {"status": "ok", "retailcrm_id": row["retailcrm_id"]}
+    return {"status": "ok", "retailcrm_id": order_row["retailcrm_id"]}
 
 
 @app.get("/health")
