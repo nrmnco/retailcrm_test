@@ -237,7 +237,7 @@ const App = () => {
                   }}
                   itemStyle={{ color: 'hsl(var(--primary))', fontSize: '14px', fontWeight: 600 }}
                   labelStyle={{ color: '#fff', marginBottom: '4px', fontWeight: 700 }}
-                  formatter={(value: number) => [formatCurrency(value), 'Revenue']}
+                  formatter={(value: any) => [formatCurrency(Number(value)), 'Revenue']}
                 />
                 <Bar 
                   dataKey="total" 
